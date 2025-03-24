@@ -1,0 +1,22 @@
+# virtual environment folder
+env/
+
+# .env file
+.env
+
+# Log and database files
+backup.log
+backups.db
+
+# Google credentials
+client_secrets.json
+mycreds.txt
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# System files
+.DS_Store
+Thumbs.db
+*.zip
