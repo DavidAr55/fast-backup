@@ -44,25 +44,66 @@ An automated backup solution that compresses directories and uploads them to Goo
 
 Create `.env` file in project root:
 ```ini
-GOOGLE_CLIENT_SECRETS_FILE="client_secrets.json"
-GOOGLE_CREDENTIALS_FILE="mycreds.txt"
+GOOGLE_CLIENT_SECRETS_FILE=client_secrets.json
+GOOGLE_CREDENTIALS_FILE=mycreds.txt
+SOURCE_DIRECTORY="C:\Path\To\Your\Directory"
+
 # Name of the folder in Google Drive where backups will be stored.
 DRIVE_FOLDER_NAME="Backup"
-# Optional test override:
-TEST_BACKUP_TIME="14:30"
+
+# Development mode: True for minute-by-minute testing, False for scheduled backups:
+DEVELOPMENT_MODE=True
 ```
 
-### Directory Configuration
-Modify `SOURCE_DIRECTORY` in `app.py` to your target backup path:
+## 📅 **Backup Schedule Configuration**
+The default backup schedule is controlled by the `schedule_backup()` function in the code:
+
 ```python
-SOURCE_DIRECTORY = r"C:\Path\To\Your\Directory"
+def schedule_backup():
+    """
+    Schedule the backup process.
+    - In DEVELOPMENT_MODE, backups run every minute (for testing).
+    - In production, backups run on Wednesdays and Fridays at 15:45 hrs.
+    """
+    if DEVELOPMENT_MODE:
+        schedule.every(1).minutes.do(perform_backup)  # Test mode
+    else:
+        schedule.every().wednesday.at("15:45").do(perform_backup)
+        schedule.every().friday.at("15:45").do(perform_backup)
 ```
+
+### How to Modify the Schedule:
+1. **Change Days/Times**:  
+   Edit the `schedule_backup()` function. Example:  
+   ```python
+   # For Mondays and Thursdays at 09:00
+   schedule.every().monday.at("09:00").do(perform_backup)
+   schedule.every().thursday.at("09:00").do(perform_backup)
+   ```
+
+2. **Adjust Frequency**:  
+   Use `schedule.every(X).hours.do(perform_backup)` for hourly backups or other [schedule](https://schedule.readthedocs.io/) syntax.
+
+3. **Development Mode**:  
+   Set `DEVELOPMENT_MODE=True` in `.env` for minute-by-minute testing.
+
+---
 
 ## Usage
 
 ```bash
+#For windows
+./env/Scripts/activate
+python app.py
+
+#For linux
+source ./env/bin/activate
 python app.py
 ```
+
+- **First run**: Authenticate via OAuth2 in the browser.
+- **Production mode**: Backups run on Wednesdays/Fridays at 15:45.
+- **Test mode**: Set `DEVELOPMENT_MODE=True` for minute-by-minute backups.
 
 **First Run Workflow:**
 1. Authentication URL will appear in console

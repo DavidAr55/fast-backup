@@ -15,29 +15,25 @@ load_dotenv()
 # ===============================
 # Global Constants and Environment Variables
 # ===============================
-# Define project constants, including the backup schedule details,
-# database file name, and log file. Also, load Google Drive credentials settings.
-BACKUP_INTERVAL_DAYS = 3
-BACKUP_TIME = "13:00"
+# Define project constants, including the database file name and log file.
 DB_FILE = "backups.db"
 LOG_FILE = "backup.log"
 
-# Environment variables for Google Drive credentials:
+# Environment variables for Google Drive credentials and backup settings:
 # GOOGLE_CLIENT_SECRETS_FILE contains the client_id and client_secret.
 # GOOGLE_CREDENTIALS_FILE stores the access tokens.
-# SOURCE_DIRECTORY is the path to the directory to backup.
-# DRIVE_FOLDER_NAME is the name of the folder in Google Drive where backups will be stored. 
-# TEST_BACKUP_TIME can override the default backup time for testing purposes.
+# SOURCE_DIRECTORY is the path where the backups (files) to be compressed are located.
+# DRIVE_FOLDER_NAME is the folder in Google Drive where the backups will be stored.
+# DEVELOPMENT_MODE: if "true", backups are scheduled every minute for testing.
 GOOGLE_CLIENT_SECRETS_FILE = os.getenv("GOOGLE_CLIENT_SECRETS_FILE", "client_secrets.json")
 GOOGLE_CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", "mycreds.txt")
-SOURCE_DIRECTORY = os.getenv("SOURCE_DIRECTORY")
-DRIVE_FOLDER_NAME = os.getenv("DRIVE_FOLDER_NAME")
-TEST_BACKUP_TIME = os.getenv("TEST_BACKUP_TIME")
+SOURCE_DIRECTORY = os.getenv("SOURCE_DIRECTORY").strip('"')
+DRIVE_FOLDER_NAME = os.getenv("DRIVE_FOLDER_NAME").strip('"')
+DEVELOPMENT_MODE = os.getenv("DEVELOPMENT_MODE", "False") == "True"
 
 # ===============================
 # Logger Configuration
 # ===============================
-# Configure the logging module to output logs both to a file and the console.
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -53,7 +49,7 @@ logging.basicConfig(
 def init_db():
     """
     Initialize the SQLite database.
-    This function creates the 'backups' table if it doesn't already exist. 
+    This function creates the 'backups' table if it doesn't already exist.
     The table stores backup entries with the timestamp, backup name, status, and message.
     """
     try:
@@ -116,25 +112,41 @@ def get_last_successful_backup():
         return None
 
 # ===============================
-# Directory Compression Function
+# File Selection and Compression Functions
 # ===============================
-def compress_directory(source, output_zip):
+def get_last_created_file(directory):
     """
-    Compress the specified directory into a zip file.
+    Retrieve the most recently modified file in the specified directory.
+    This function lists all files in the directory and returns the one with the latest modification time.
     Parameters:
-        source (str): The directory to be compressed.
+        directory (str): The directory to search.
+    Returns:
+        str: The full path of the most recently modified file, or None if the directory is empty.
+    """
+    try:
+        files = [os.path.join(directory, f) for f in os.listdir(directory) 
+                 if os.path.isfile(os.path.join(directory, f))]
+        if not files:
+            return None
+        last_file = max(files, key=os.path.getmtime)
+        return last_file
+    except Exception as e:
+        logging.error(f"Error al obtener el último archivo creado: {e}")
+        return None
+
+def compress_file(file_path, output_zip):
+    """
+    Compress a single file into a zip archive.
+    Parameters:
+        file_path (str): The file to be compressed.
         output_zip (str): The path and name of the output zip file.
     Returns:
         tuple: (True, message) if compression succeeds, or (False, error message) on failure.
     """
     try:
         with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            for root, dirs, files in os.walk(source):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, source)
-                    zipf.write(file_path, arcname)
-        return True, "Backup comprimido correctamente."
+            zipf.write(file_path, os.path.basename(file_path))
+        return True, "Archivo comprimido correctamente."
     except Exception as e:
         return False, str(e)
 
@@ -180,21 +192,17 @@ def upload_to_drive(file_path):
     """
     try:
         gauth = GoogleAuth()
-        
         # Set the client configuration file for OAuth2
         gauth.settings['client_config_file'] = GOOGLE_CLIENT_SECRETS_FILE
         
         # Load stored credentials from file
         gauth.LoadCredentialsFile(GOOGLE_CREDENTIALS_FILE)
         if gauth.credentials is None:
-            # No stored credentials: prompt the user for authentication via command-line
-            gauth.CommandLineAuth()
+            gauth.CommandLineAuth()  # Prompt for authentication if no credentials
         elif gauth.access_token_expired:
-            # Credentials exist but token expired: refresh the token
-            gauth.Refresh()
+            gauth.Refresh()  # Refresh expired token
         else:
-            # Credentials are valid: authorize directly
-            gauth.Authorize()
+            gauth.Authorize()  # Credentials valid, authorize directly
         
         # Save the credentials for future use
         gauth.SaveCredentialsFile(GOOGLE_CREDENTIALS_FILE)
@@ -220,18 +228,21 @@ def upload_to_drive(file_path):
 def perform_backup():
     """
     Execute the complete backup process.
-    This function compresses the source directory, uploads the resulting zip file to Google Drive,
-    deletes the local zip file if the upload is successful, and registers the outcome in the database.
-    It logs each step's status.
+    This function selects the most recently modified file from SOURCE_DIRECTORY,
+    compresses it into a zip archive, uploads the zip to Google Drive,
+    deletes the local zip file upon successful upload, and registers the outcome in the database.
     """
     try:
+        last_file = get_last_created_file(SOURCE_DIRECTORY)
+        if last_file is None:
+            logging.error("No se encontró ningún archivo en el directorio.")
+            return
         current_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        folder_name = os.path.basename(os.path.normpath(SOURCE_DIRECTORY))
-        backup_name = f"backup_{folder_name}_{current_time}.zip"
+        backup_name = f"backup_{os.path.basename(last_file)}_{current_time}.zip"
         output_path = os.path.join(os.getcwd(), backup_name)
         
-        logging.info(f"Iniciando respaldo del directorio: {SOURCE_DIRECTORY}")
-        success, message = compress_directory(SOURCE_DIRECTORY, output_path)
+        logging.info(f"Iniciando respaldo del archivo: {last_file}")
+        success, message = compress_file(last_file, output_path)
         if not success:
             logging.error(f"Error al comprimir: {message}")
             register_backup(backup_name, "Fallo", message)
@@ -255,41 +266,22 @@ def perform_backup():
         register_backup("N/A", "Fallo", str(e))
 
 # ===============================
-# Backup Scheduling Functions
+# Backup Scheduling Function
 # ===============================
-def is_backup_due():
-    """
-    Determine whether a backup is due.
-    This function checks the timestamp of the last successful backup and compares it with the current time.
-    It returns True if no backup exists or if the elapsed days are equal to or exceed the defined interval.
-    """
-    last_backup = get_last_successful_backup()
-    if last_backup is None:
-        return True
-    delta = datetime.datetime.now() - last_backup
-    return delta.days >= BACKUP_INTERVAL_DAYS
-
-def daily_task():
-    """
-    Execute the daily backup task.
-    This function checks if the backup conditions are met (using is_backup_due) and triggers the backup process if they are.
-    """
-    logging.info("Verificando si es tiempo de realizar el respaldo...")
-    if is_backup_due():
-        logging.info("Se cumplen las condiciones para realizar el respaldo.")
-        perform_backup()
-    else:
-        logging.info("No es momento de hacer un respaldo. Se esperan los 3 días de intervalo.")
-
 def schedule_backup():
     """
-    Schedule the daily backup process.
-    This function sets up a daily scheduler using the 'schedule' module. It runs the daily_task() at the specified time,
-    which can be overridden by the TEST_BACKUP_TIME environment variable.
+    Schedule the backup process.
+    - In DEVELOPMENT_MODE, backups are scheduled to run every minute (all days).
+    - Otherwise, backups are scheduled only on Wednesdays and Fridays at 15:45 hrs.
     """
-    schedule_time = TEST_BACKUP_TIME if TEST_BACKUP_TIME else BACKUP_TIME
-    schedule.every().day.at(schedule_time).do(daily_task)
-    logging.info(f"Programación de respaldos iniciada. Esperando ejecución diaria a las {schedule_time}.")
+    if DEVELOPMENT_MODE:
+        schedule.every(1).minutes.do(perform_backup)
+        logging.info("Modo desarrollador activado: Se programarán respaldos cada minuto.")
+    else:
+        schedule.every().wednesday.at("15:45").do(perform_backup)
+        schedule.every().friday.at("15:45").do(perform_backup)
+        logging.info("Programación de respaldos iniciada. Se ejecutarán cada miércoles y viernes a las 15:45 hrs.")
+    
     while True:
         schedule.run_pending()
         time.sleep(1)
